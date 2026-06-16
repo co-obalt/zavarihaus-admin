@@ -170,7 +170,7 @@ export const getProfitLossReportForRange = (state: HotelState, range: ProfitLoss
   const expenseLineTotals = new Map<string, number>();
 
   state.bookings
-    .filter((booking) => booking.status !== 'cancelled')
+    .filter((booking) => booking.status !== 'cancelled' && booking.status !== 'rejected' && booking.status !== 'pending')
     .forEach((booking) => {
       const totalNights = Math.max(
         1,

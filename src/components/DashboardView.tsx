@@ -74,8 +74,8 @@ export default function DashboardView({ state, setView, currentUserRole }: Dashb
   const blockedRoomsCount = roomStatusCounts.blocked;
   const roomsInUseCount = occupiedRoomsCount + holdRoomsCount;
   const occupancyRate = totalRooms > 0 ? Math.round((roomsInUseCount / totalRooms) * 100) : 0;
-  const todayArrivals = bookings.filter((booking) => booking.status !== 'cancelled' && booking.checkInDate === todayStr);
-  const todayDepartures = bookings.filter((booking) => booking.status !== 'cancelled' && booking.checkOutDate === todayStr);
+  const todayArrivals = bookings.filter((booking) => booking.status !== 'cancelled' && booking.status !== 'rejected' && booking.status !== 'pending' && booking.checkInDate === todayStr);
+  const todayDepartures = bookings.filter((booking) => booking.status !== 'cancelled' && booking.status !== 'rejected' && booking.status !== 'pending' && booking.checkOutDate === todayStr);
   const todayCheckIns = bookings.filter((booking) => booking.checkedInAt?.slice(0, 10) === todayStr);
   const todayCheckOuts = bookings.filter((booking) => booking.checkedOutAt?.slice(0, 10) === todayStr);
   const monthlyReport = getMonthlyProfitLossReport(state, reportMonth);
