@@ -4,9 +4,10 @@ import { CurrentUser } from '../types';
 
 interface LoginViewProps {
   onLoginSuccess: (token: string, isDemoMode: boolean, user: CurrentUser) => void;
+  onBackToLanding?: () => void;
 }
 
-export default function LoginView({ onLoginSuccess }: LoginViewProps) {
+export default function LoginView({ onLoginSuccess, onBackToLanding }: LoginViewProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -152,6 +153,15 @@ export default function LoginView({ onLoginSuccess }: LoginViewProps) {
             {loading ? 'Checking...' : 'Login'}
           </button>
         </form>
+
+        {onBackToLanding && (
+          <button
+            onClick={onBackToLanding}
+            className="mt-4 w-full text-center text-xs text-slate-400 hover:text-slate-600 transition cursor-pointer"
+          >
+            ← Back to homepage
+          </button>
+        )}
 
         <p className="mt-5 text-center text-xs text-slate-400">
           {dbConfigured ? 'Supabase connected' : 'Supabase not configured'}

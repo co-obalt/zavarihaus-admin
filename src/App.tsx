@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { Room, Guest, Booking, Expense, InvestorContribution, HotelState, BookingStatus, ExpenseStatus, HousekeepingStatus, MaintenanceIssue, CurrentUser, ExtraRevenueEntry, UserRole, ProofAttachment } from './types';
 import { INITIAL_STATE } from './data';
+import { DEMO_STATE, DEMO_USER, DEMO_TOKEN } from './lib/demoData';
 import DashboardView from './components/DashboardView';
 import BookingsView from './components/BookingsView';
 import GuestsView from './components/GuestsView';
@@ -28,6 +29,7 @@ import RoomsView from './components/RoomsView';
 import HistoryView from './components/HistoryView';
 import SchedulerCalendarView from './components/SchedulerCalendarView';
 import LoginView from './components/LoginView';
+import LandingPage from './components/LandingPage';
 import WebsiteInquiriesView from './components/WebsiteInquiriesView';
 import WebsiteBookingsView from './components/WebsiteBookingsView';
 import { createEntityId, normalizeHotelState } from './lib/hotelState';
@@ -143,6 +145,22 @@ export default function App() {
     email: localStorage.getItem(USER_EMAIL_STORAGE_KEY) || 'owner@zavarihaus.com',
     role: (localStorage.getItem(USER_ROLE_STORAGE_KEY) as UserRole) || 'owner-admin',
   }));
+  // URL-based routing — reads pathname, updates on pushState
+  const [route, setRoute] = useState(() => window.location.pathname);
+
+  useEffect(() => {
+    const onPop = () => setRoute(window.location.pathname);
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
+
+  const navigate = (path: string) => {
+    window.history.pushState({}, '', path);
+    setRoute(path);
+  };
+
+  const [demoBannerDismissed, setDemoBannerDismissed] = useState(false);
+
   const [loadingState, setLoadingState] = useState(true);
   const [, setDbConnected] = useState(false);
   const [syncErrorMessage, setSyncErrorMessage] = useState<string | null>(null);
@@ -282,10 +300,33 @@ export default function App() {
     localStorage.removeItem('vha_is_demo');
     localStorage.removeItem(USER_ROLE_STORAGE_KEY);
     localStorage.removeItem(USER_EMAIL_STORAGE_KEY);
+    setDemoBannerDismissed(false);
+    navigate('/');
   };
 
-  // 1. STATE HYDRATION EFFECT: Fetch initial state from database
+  // Demo mode activator — loads mock data, skips all API calls
+  const handleStartDemo = () => {
+    const demoState = normalizeHotelState(DEMO_STATE);
+    stateRef.current = demoState;
+    setState(demoState);
+    setCurrentUser(DEMO_USER);
+    setSessionToken(DEMO_TOKEN);
+    setIsDemoMode(true);
+    setAllowServerSync(false);
+    setLoadingState(false);
+    setActiveView('dashboard');
+    navigate('/demo');
+  };
+
+  // STATE HYDRATION EFFECT: skip API fetch entirely in demo mode
   useEffect(() => {
+    // /demo route: use mock data, never call API
+    if (isDemoMode && sessionToken === DEMO_TOKEN) {
+      setLoadingState(false);
+      setAllowServerSync(false);
+      return;
+    }
+
     if (!sessionToken) {
       setLoadingState(false);
       setAllowServerSync(false);
@@ -1044,10 +1085,34 @@ export default function App() {
   const currentViewLabel = flatAvailableViews.find((item) => item.view === activeView)?.label
     || (activeView === 'investors' ? 'Finance / Investors' : activeView === 'expenses' ? 'Expenses & Maintenance' : 'Dashboard');
 
-  // Auth gate check
-  if (!sessionToken) {
+  // ── URL-based routing ────────────────────────────────────────────────────
+  // Route: / → Landing page
+  if (route === '/' || route === '') {
+    // If already logged in (real session), redirect straight to /admin
+    if (sessionToken && sessionToken !== DEMO_TOKEN) {
+      navigate('/admin');
+      return null;
+    }
     return (
-      <LoginView 
+      <LandingPage
+        onNavigate={(r) => {
+          if (r === 'login') navigate('/login');
+          if (r === 'demo') handleStartDemo();
+          if (r === 'landing') navigate('/');
+        }}
+      />
+    );
+  }
+
+  // Route: /login → Login form
+  if (route === '/login') {
+    // Already logged in → go straight to admin
+    if (sessionToken && sessionToken !== DEMO_TOKEN) {
+      navigate('/admin');
+      return null;
+    }
+    return (
+      <LoginView
         onLoginSuccess={(token, demo, user) => {
           setSessionToken(token);
           setIsDemoMode(demo);
@@ -1057,10 +1122,34 @@ export default function App() {
           safeLocalStorageSetItem('vha_is_demo', String(demo));
           safeLocalStorageSetItem(USER_ROLE_STORAGE_KEY, user.role);
           safeLocalStorageSetItem(USER_EMAIL_STORAGE_KEY, user.email);
-        }} 
+          navigate('/admin');
+        }}
+        onBackToLanding={() => navigate('/')}
       />
     );
   }
+
+  // Route: /demo → Full app with demo data (handleStartDemo already set state)
+  // Route: /admin → Full app with real session
+  // Both render the panel below — guard against no session on /admin
+  if (route !== '/demo' && route !== '/admin' && !route.startsWith('/admin')) {
+    // Unknown route → landing
+    navigate('/');
+    return null;
+  }
+
+  // If on /admin but no real session, bounce to login
+  if ((route === '/admin' || route.startsWith('/admin')) && !isDemoMode && !sessionToken) {
+    navigate('/login');
+    return null;
+  }
+
+  // If on /demo but demo wasn't started via button (direct URL visit), start it now
+  if (route === '/demo' && sessionToken !== DEMO_TOKEN) {
+    handleStartDemo();
+    return null;
+  }
+
 
   // Session loader check
   if (loadingState) {
@@ -1078,7 +1167,8 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen w-screen overflow-hidden bg-[#f6f7fb] flex" id="applet-viewport-root">
+    <div className="h-screen w-screen overflow-hidden bg-[#f6f7fb] flex animate-[fadeIn_0.35s_ease-out]" id="applet-viewport-root" style={{ animation: 'fadeInPanel 0.35s ease-out' }}>
+    <style>{`@keyframes fadeInPanel { from { opacity: 0; } to { opacity: 1; } }`}</style>
       
       {/* Sidebar Navigation */}
       <aside 
@@ -1219,6 +1309,17 @@ export default function App() {
 
         {/* Scrollable Canvas area */}
         <main className="flex-1 overflow-y-auto p-3 md:p-4 xl:p-5 max-w-[1180px] mx-auto w-full" id="main-scroll-canvas">
+          {/* Demo mode banner */}
+          {isDemoMode && !demoBannerDismissed && (
+            <div className="mb-4 flex items-center justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <div className="flex items-center gap-2">
+                <span className="text-base">🔍</span>
+                <span><strong>Demo Mode</strong> — You are viewing sample data. All changes are local and will not be saved.</span>
+              </div>
+              <button onClick={() => setDemoBannerDismissed(true)} className="shrink-0 text-amber-600 hover:text-amber-900 font-bold text-lg leading-none cursor-pointer">×</button>
+            </div>
+          )}
+
           {syncErrorMessage && (
             <div className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
               {syncErrorMessage}
