@@ -53,6 +53,75 @@ const STORAGE_KEY = 'hotel_manager_state';
 const USER_ROLE_STORAGE_KEY = 'vha_auth_role';
 const USER_EMAIL_STORAGE_KEY = 'vha_auth_email';
 
+const safeLocalStorageSetItem = (key: string, value: string) => {
+  try {
+    localStorage.setItem(key, value);
+  } catch (error) {
+    console.warn(`Failed to set "${key}" in localStorage, attempting to clear first...`, error);
+    try {
+      localStorage.removeItem(key);
+      localStorage.setItem(key, value);
+    } catch (retryError) {
+      console.error(`Failed to set "${key}" in localStorage after retry:`, retryError);
+    }
+  }
+};
+
+const cleanStateForLocalStorage = (state: HotelState): HotelState => {
+  const cleanAttachments = (attachments?: ProofAttachment[]): ProofAttachment[] | undefined => {
+    if (!attachments) return attachments;
+    return attachments.map(att => ({
+      ...att,
+      dataUrl: '' // Remove base64 data to avoid quota exceeded
+    }));
+  };
+
+  return {
+    ...state,
+    guests: state.guests?.map(g => ({
+      ...g,
+      identityProofs: cleanAttachments(g.identityProofs)
+    })) || [],
+    bookings: state.bookings?.map(b => ({
+      ...b,
+      proofs: cleanAttachments(b.proofs)
+    })) || [],
+    expenses: state.expenses?.map(e => ({
+      ...e,
+      proofs: cleanAttachments(e.proofs)
+    })) || [],
+    investors: state.investors?.map(i => ({
+      ...i,
+      proofs: cleanAttachments(i.proofs)
+    })) || [],
+    maintenanceIssues: state.maintenanceIssues?.map(m => ({
+      ...m,
+      beforePhotos: cleanAttachments(m.beforePhotos),
+      afterPhotos: cleanAttachments(m.afterPhotos)
+    })) || [],
+    extraRevenueEntries: state.extraRevenueEntries?.map(r => ({
+      ...r,
+      proofs: cleanAttachments(r.proofs)
+    })) || []
+  };
+};
+
+const safeSaveStateToLocalStorage = (state: HotelState) => {
+  const cleaned = cleanStateForLocalStorage(state);
+  const serialized = JSON.stringify(cleaned);
+  try {
+    localStorage.setItem(STORAGE_KEY, serialized);
+  } catch (error) {
+    console.warn("Failed to set state in localStorage, attempting to clear and retry...", error);
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.setItem(STORAGE_KEY, serialized);
+    } catch (retryError) {
+      console.error("Failed to save state to localStorage even after clearing:", retryError);
+    }
+  }
+};
+
 type NavItem = {
   view: AppView;
   label: string;
@@ -251,8 +320,8 @@ export default function App() {
         setAllowServerSync(true);
         if (data.currentUser) {
           setCurrentUser(data.currentUser);
-          localStorage.setItem(USER_ROLE_STORAGE_KEY, data.currentUser.role);
-          localStorage.setItem(USER_EMAIL_STORAGE_KEY, data.currentUser.email);
+          safeLocalStorageSetItem(USER_ROLE_STORAGE_KEY, data.currentUser.role);
+          safeLocalStorageSetItem(USER_EMAIL_STORAGE_KEY, data.currentUser.email);
         }
         const hydratedState = normalizeHotelState({
           rooms: data.rooms || INITIAL_STATE.rooms,
@@ -293,12 +362,12 @@ export default function App() {
   // Keep the latest resolved state mirrored for durable local fallback.
   useEffect(() => {
     stateRef.current = state;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    safeSaveStateToLocalStorage(state);
   }, [state]);
 
   useEffect(() => {
-    localStorage.setItem(USER_ROLE_STORAGE_KEY, currentUser.role);
-    localStorage.setItem(USER_EMAIL_STORAGE_KEY, currentUser.email);
+    safeLocalStorageSetItem(USER_ROLE_STORAGE_KEY, currentUser.role);
+    safeLocalStorageSetItem(USER_EMAIL_STORAGE_KEY, currentUser.email);
     if (!canAccessView(currentUser.role, activeView)) {
       setActiveView(getDefaultViewForRole(currentUser.role));
     }
@@ -984,10 +1053,10 @@ export default function App() {
           setIsDemoMode(demo);
           setCurrentUser(user);
           setActiveView(getDefaultViewForRole(user.role));
-          localStorage.setItem('vha_auth_token', token);
-          localStorage.setItem('vha_is_demo', String(demo));
-          localStorage.setItem(USER_ROLE_STORAGE_KEY, user.role);
-          localStorage.setItem(USER_EMAIL_STORAGE_KEY, user.email);
+          safeLocalStorageSetItem('vha_auth_token', token);
+          safeLocalStorageSetItem('vha_is_demo', String(demo));
+          safeLocalStorageSetItem(USER_ROLE_STORAGE_KEY, user.role);
+          safeLocalStorageSetItem(USER_EMAIL_STORAGE_KEY, user.email);
         }} 
       />
     );
