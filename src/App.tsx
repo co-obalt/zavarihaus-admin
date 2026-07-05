@@ -322,6 +322,22 @@ export default function App() {
   useEffect(() => {
     // /demo route: use mock data, never call API
     if (isDemoMode && sessionToken === DEMO_TOKEN) {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      if (saved) {
+        try {
+          const fallbackState = normalizeHotelState(JSON.parse(saved));
+          stateRef.current = fallbackState;
+          setState(fallbackState);
+        } catch (e) {
+          const demoState = normalizeHotelState(DEMO_STATE);
+          stateRef.current = demoState;
+          setState(demoState);
+        }
+      } else {
+        const demoState = normalizeHotelState(DEMO_STATE);
+        stateRef.current = demoState;
+        setState(demoState);
+      }
       setLoadingState(false);
       setAllowServerSync(false);
       return;
@@ -357,26 +373,49 @@ export default function App() {
     .then(data => {
       if (data) {
         setSyncErrorMessage(null);
-        setDbConnected(data.isSupabaseConnected || false);
-        setAllowServerSync(true);
+        const isDbConnected = data.isSupabaseConnected || false;
+        setDbConnected(isDbConnected);
+        
         if (data.currentUser) {
           setCurrentUser(data.currentUser);
           safeLocalStorageSetItem(USER_ROLE_STORAGE_KEY, data.currentUser.role);
           safeLocalStorageSetItem(USER_EMAIL_STORAGE_KEY, data.currentUser.email);
         }
-        const hydratedState = normalizeHotelState({
-          rooms: data.rooms || INITIAL_STATE.rooms,
-          guests: data.guests || [],
-          bookings: data.bookings || [],
-          expenses: data.expenses || [],
-          investors: data.investors || [],
-          maintenanceIssues: data.maintenanceIssues || [],
-          extraRevenueEntries: data.extraRevenueEntries || [],
-          auditLogs: data.auditLogs || [],
-        });
-        // Hydrate React state with secure real database rows
-        stateRef.current = hydratedState;
-        setState(hydratedState);
+
+        if (!isDbConnected) {
+          setAllowServerSync(false);
+          const saved = localStorage.getItem(STORAGE_KEY);
+          if (saved) {
+            try {
+              const fallbackState = normalizeHotelState(JSON.parse(saved));
+              stateRef.current = fallbackState;
+              setState(fallbackState);
+            } catch (e) {
+              const fallbackState = normalizeHotelState(INITIAL_STATE);
+              stateRef.current = fallbackState;
+              setState(fallbackState);
+            }
+          } else {
+            const fallbackState = normalizeHotelState(INITIAL_STATE);
+            stateRef.current = fallbackState;
+            setState(fallbackState);
+          }
+        } else {
+          setAllowServerSync(true);
+          const hydratedState = normalizeHotelState({
+            rooms: data.rooms || INITIAL_STATE.rooms,
+            guests: data.guests || [],
+            bookings: data.bookings || [],
+            expenses: data.expenses || [],
+            investors: data.investors || [],
+            maintenanceIssues: data.maintenanceIssues || [],
+            extraRevenueEntries: data.extraRevenueEntries || [],
+            auditLogs: data.auditLogs || [],
+          });
+          // Hydrate React state with secure real database rows
+          stateRef.current = hydratedState;
+          setState(hydratedState);
+        }
       }
     })
     .catch(err => {
@@ -402,9 +441,10 @@ export default function App() {
 
   // Keep the latest resolved state mirrored for durable local fallback.
   useEffect(() => {
+    if (loadingState) return;
     stateRef.current = state;
     safeSaveStateToLocalStorage(state);
-  }, [state]);
+  }, [state, loadingState]);
 
   useEffect(() => {
     safeLocalStorageSetItem(USER_ROLE_STORAGE_KEY, currentUser.role);
