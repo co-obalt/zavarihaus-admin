@@ -1521,12 +1521,123 @@ app.post("/api/sync", requireAuth, async (req, res) => {
     }
   }
 
-  const guests = canServerManageGuests(actorRole) ? incomingGuests : [];
-  const bookings = canServerManageBookings(actorRole) ? incomingBookings : [];
-  const expenses = canServerManageExpenses(actorRole) ? incomingExpenses : [];
-  const investors = canServerManageInvestors(actorRole) ? incomingInvestors : [];
-  const maintenanceIssues = canServerManageMaintenanceIssues(actorRole) ? incomingMaintenanceIssues : [];
-  const extraRevenueEntries = canServerManageInvestors(actorRole) ? incomingExtraRevenueEntries : [];
+  // Helper to restore base64 dataUrl from existing DB records if incoming payload has it empty (stripped to avoid 413 error)
+  const restoreProofs = (incomingProofs: any[], existingProofs: any[]) => {
+    if (!Array.isArray(incomingProofs)) return [];
+    const existingMap = new Map(
+      (Array.isArray(existingProofs) ? existingProofs : [])
+        .filter((p: any) => p && p.id)
+        .map((p: any) => [p.id, p])
+    );
+    return incomingProofs.map((p: any) => {
+      if (!p.dataUrl) {
+        const existing = existingMap.get(p.id);
+        if (existing && existing.dataUrl) {
+          return { ...p, dataUrl: existing.dataUrl };
+        }
+      }
+      return p;
+    });
+  };
+
+  const existingGuestsById = new Map<string, any>();
+  const existingBookingsById = new Map<string, any>();
+  const existingInvestorsById = new Map<string, any>();
+  const existingExpensesById = new Map<string, any>();
+
+  try {
+    const [guestsRes, bookingsRes, investorsRes, expensesRes] = await Promise.all([
+      supabase.from("guests").select("id, notes"),
+      supabase.from("bookings").select("id, notes"),
+      supabase.from("investors").select("id, notes"),
+      supabase.from("expenses").select("id, description")
+    ]);
+
+    if (!guestsRes.error && guestsRes.data) {
+      guestsRes.data.forEach((g: any) => {
+        existingGuestsById.set(g.id, decodeGuestMeta(g.notes));
+      });
+    }
+    if (!bookingsRes.error && bookingsRes.data) {
+      bookingsRes.data.forEach((b: any) => {
+        existingBookingsById.set(b.id, decodeBookingMeta(b.notes));
+      });
+    }
+    if (!investorsRes.error && investorsRes.data) {
+      investorsRes.data.forEach((i: any) => {
+        existingInvestorsById.set(i.id, decodeInvestorMeta(i.notes));
+      });
+    }
+    if (!expensesRes.error && expensesRes.data) {
+      expensesRes.data.forEach((e: any) => {
+        if (isStoredMaintenanceIssueRow(e)) {
+          existingExpensesById.set(e.id, { type: 'maintenance', meta: decodeMaintenanceIssueMeta(e.description) });
+        } else if (isStoredExtraRevenueRow(e)) {
+          existingExpensesById.set(e.id, { type: 'revenue', meta: decodeExtraRevenueMeta(e.description) });
+        } else if (isStoredAuditLogRow(e)) {
+          // Audit logs do not have proofs
+        } else {
+          existingExpensesById.set(e.id, { type: 'expense', meta: decodeExpenseMeta(e.description) });
+        }
+      });
+    }
+  } catch (err) {
+    console.error("Failed to load existing records for proof dataUrl restoration:", err);
+  }
+
+  const guests = (canServerManageGuests(actorRole) ? incomingGuests : []).map((g: any) => {
+    const existing = existingGuestsById.get(g.id);
+    return {
+      ...g,
+      identityProofs: restoreProofs(g.identityProofs, existing?.identityProofs)
+    };
+  });
+
+  const bookings = (canServerManageBookings(actorRole) ? incomingBookings : []).map((b: any) => {
+    const existing = existingBookingsById.get(b.id);
+    return {
+      ...b,
+      proofs: restoreProofs(b.proofs, existing?.proofs)
+    };
+  });
+
+  const expenses = (canServerManageExpenses(actorRole) ? incomingExpenses : []).map((e: any) => {
+    const existing = existingExpensesById.get(e.id);
+    const existingProofs = existing?.type === 'expense' ? existing?.meta?.proofs : [];
+    return {
+      ...e,
+      proofs: restoreProofs(e.proofs, existingProofs)
+    };
+  });
+
+  const investors = (canServerManageInvestors(actorRole) ? incomingInvestors : []).map((i: any) => {
+    const existing = existingInvestorsById.get(i.id);
+    return {
+      ...i,
+      proofs: restoreProofs(i.proofs, existing?.proofs)
+    };
+  });
+
+  const maintenanceIssues = (canServerManageMaintenanceIssues(actorRole) ? incomingMaintenanceIssues : []).map((m: any) => {
+    const existing = existingExpensesById.get(m.id);
+    const existingBefore = existing?.type === 'maintenance' ? existing?.meta?.beforePhotos : [];
+    const existingAfter = existing?.type === 'maintenance' ? existing?.meta?.afterPhotos : [];
+    return {
+      ...m,
+      beforePhotos: restoreProofs(m.beforePhotos, existingBefore),
+      afterPhotos: restoreProofs(m.afterPhotos, existingAfter)
+    };
+  });
+
+  const extraRevenueEntries = (canServerManageInvestors(actorRole) ? incomingExtraRevenueEntries : []).map((er: any) => {
+    const existing = existingExpensesById.get(er.id);
+    const existingProofs = existing?.type === 'revenue' ? existing?.meta?.proofs : [];
+    return {
+      ...er,
+      proofs: restoreProofs(er.proofs, existingProofs)
+    };
+  });
+
   const auditLogs = incomingAuditLogs;
 
   for (const booking of bookings) {

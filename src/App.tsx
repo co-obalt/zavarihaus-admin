@@ -205,7 +205,7 @@ export default function App() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${sessionToken}`
         },
-        body: JSON.stringify(nextState)
+        body: JSON.stringify(cleanStateForLocalStorage(nextState))
       });
 
       if (res.status === 401) {
@@ -468,7 +468,7 @@ export default function App() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${sessionToken}`
         },
-        body: JSON.stringify(state),
+        body: JSON.stringify(cleanStateForLocalStorage(state)),
         signal: controller.signal
       })
       .then(async res => {
