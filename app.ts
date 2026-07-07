@@ -39,6 +39,9 @@ const BRUTE_FORCE_LIMIT = 5; // max 5 attempts per window
 const TIME_WINDOW_MS = 60 * 1000; // 1 minute
 const COOL_DOWN_MS = 2000; // 2 seconds delay feedback spacing
 
+// In-memory local proof storage for demo and local-only fallback modes
+const localProofs = new Map<string, { id: string; name: string; mimeType: string; size: number; dataUrl: string }>();
+
 const applyLoginRateLimit = (ip: string): { allowed: boolean; waitTime: number } => {
   const now = Date.now();
   const record = loginAttempts.get(ip);
@@ -374,6 +377,60 @@ const EXPENSE_META_PREFIX = "__ZVH_EXPENSE_META__:";
 const ISSUE_META_PREFIX = "__ZVH_MAINTENANCE_ISSUE__:";
 const REVENUE_META_PREFIX = "__ZVH_EXTRA_REVENUE__:";
 const AUDIT_META_PREFIX = "__ZVH_AUDIT_LOG__:";
+const PROOF_FILE_PREFIX = "__ZVH_PROOF_FILE__:";
+
+const isStoredProofFileRow = (row: any) =>
+  typeof row?.description === "string" && row.description.startsWith(PROOF_FILE_PREFIX);
+
+const encodeProofFileDescription = (proof: any) =>
+  `${PROOF_FILE_PREFIX}${JSON.stringify({
+    mimeType: proof.mimeType,
+    size: proof.size,
+    dataUrl: proof.dataUrl
+  })}`;
+
+const decodeProofFileMeta = (description: unknown) => {
+  const parsed = parseStructuredPayload(description, PROOF_FILE_PREFIX);
+  if (!parsed) {
+    return {
+      mimeType: "application/octet-stream",
+      size: 0,
+      dataUrl: ""
+    };
+  }
+  return {
+    mimeType: parsed.mimeType || "application/octet-stream",
+    size: Number(parsed.size || 0),
+    dataUrl: parsed.dataUrl || ""
+  };
+};
+
+const signProofsDataUrl = (proofs: any[], token: string) => {
+  if (!Array.isArray(proofs)) return [];
+  return proofs.map((p: any) => {
+    if (p && typeof p.dataUrl === "string" && p.dataUrl.startsWith("/api/proofs/")) {
+      const baseUrl = p.dataUrl.split("?")[0];
+      return {
+        ...p,
+        dataUrl: `${baseUrl}?token=${token}`
+      };
+    }
+    return p;
+  });
+};
+
+const unsignProofsDataUrl = (proofs: any[]) => {
+  if (!Array.isArray(proofs)) return [];
+  return proofs.map((p: any) => {
+    if (p && typeof p.dataUrl === "string" && p.dataUrl.startsWith("/api/proofs/")) {
+      return {
+        ...p,
+        dataUrl: p.dataUrl.split("?")[0]
+      };
+    }
+    return p;
+  });
+};
 
 const parseStructuredPayload = (value: unknown, prefix: string) => {
   if (typeof value !== "string" || !value.startsWith(prefix)) {
@@ -394,7 +451,7 @@ const encodeGuestNotes = (guest: any) =>
     documentNumber: guest.documentNumber || "",
     preferences: guest.preferences || "",
     profileStatus: guest.profileStatus || "standard",
-    identityProofs: Array.isArray(guest.identityProofs) ? guest.identityProofs : [],
+    identityProofs: Array.isArray(guest.identityProofs) ? unsignProofsDataUrl(guest.identityProofs) : [],
   })}`;
 
 const decodeGuestMeta = (notes: unknown) => {
@@ -423,7 +480,7 @@ const decodeGuestMeta = (notes: unknown) => {
 const encodeInvestorNotes = (investor: any) =>
   `${INVESTOR_META_PREFIX}${JSON.stringify({
     notes: investor.notes || "",
-    proofs: Array.isArray(investor.proofs) ? investor.proofs : [],
+    proofs: Array.isArray(investor.proofs) ? unsignProofsDataUrl(investor.proofs) : [],
   })}`;
 
 const decodeInvestorMeta = (notes: unknown) => {
@@ -503,7 +560,7 @@ const encodeBookingNotes = (booking: any) =>
     reviewNotes: booking.reviewNotes || "",
     damageNotes: booking.damageNotes || "",
     complaintNotes: booking.complaintNotes || "",
-    proofs: Array.isArray(booking.proofs) ? booking.proofs : [],
+    proofs: Array.isArray(booking.proofs) ? unsignProofsDataUrl(booking.proofs) : [],
   })}`;
 
 const decodeBookingMeta = (notes: unknown) => {
@@ -562,7 +619,7 @@ const encodeExpenseDescription = (expense: any) =>
     maintenanceIssueId: expense.maintenanceIssueId || "",
     vendorName: expense.vendorName || "",
     receiptReference: expense.receiptReference || "",
-    proofs: Array.isArray(expense.proofs) ? expense.proofs : [],
+    proofs: Array.isArray(expense.proofs) ? unsignProofsDataUrl(expense.proofs) : [],
   })}`;
 
 const decodeExpenseMeta = (description: unknown) => {
@@ -597,8 +654,8 @@ const encodeMaintenanceIssueDescription = (issue: any) =>
     status: issue.status || "reported",
     assignedTo: issue.assignedTo || "",
     notes: issue.notes || "",
-    beforePhotos: Array.isArray(issue.beforePhotos) ? issue.beforePhotos : [],
-    afterPhotos: Array.isArray(issue.afterPhotos) ? issue.afterPhotos : [],
+    beforePhotos: Array.isArray(issue.beforePhotos) ? unsignProofsDataUrl(issue.beforePhotos) : [],
+    afterPhotos: Array.isArray(issue.afterPhotos) ? unsignProofsDataUrl(issue.afterPhotos) : [],
   })}`;
 
 const decodeMaintenanceIssueMeta = (description: unknown) => {
@@ -632,7 +689,7 @@ const encodeExtraRevenueDescription = (entry: any) =>
     category: entry.category || "extra-charges",
     notes: entry.notes || "",
     linkedBookingId: entry.linkedBookingId || "",
-    proofs: Array.isArray(entry.proofs) ? entry.proofs : [],
+    proofs: Array.isArray(entry.proofs) ? unsignProofsDataUrl(entry.proofs) : [],
   })}`;
 
 const decodeExtraRevenueMeta = (description: unknown) => {
@@ -1208,8 +1265,12 @@ app.get("/api/state", requireAuth, async (req, res) => {
     role: normalizeUserRole(authRequest.session.role),
   };
 
+  const token = req.headers.authorization?.replace("Bearer ", "") || "";
+
   // If Supabase not Configured, return empty client data structures to load cleanly locally
   if (!supabase) {
+    // Collect local proofs that correspond to requested format if needed, but since it is in-memory
+    // and local client state is persistent, local client already has the dataUrls.
     return res.json({
       isSupabaseConnected: false,
       currentUser,
@@ -1260,7 +1321,7 @@ app.get("/api/state", requireAuth, async (req, res) => {
         documentNumber: guestMeta.documentNumber,
         preferences: guestMeta.preferences,
         profileStatus: guestMeta.profileStatus,
-        identityProofs: guestMeta.identityProofs,
+        identityProofs: signProofsDataUrl(guestMeta.identityProofs, token),
       };
     });
 
@@ -1298,7 +1359,7 @@ app.get("/api/state", requireAuth, async (req, res) => {
         reviewNotes: bookingMeta.reviewNotes,
         damageNotes: bookingMeta.damageNotes,
         complaintNotes: bookingMeta.complaintNotes,
-        proofs: bookingMeta.proofs,
+        proofs: signProofsDataUrl(bookingMeta.proofs, token),
       };
     });
 
@@ -1315,8 +1376,8 @@ app.get("/api/state", requireAuth, async (req, res) => {
           reportedDate: row.date,
           assignedTo: meta.assignedTo,
           notes: meta.notes,
-          beforePhotos: meta.beforePhotos,
-          afterPhotos: meta.afterPhotos,
+          beforePhotos: signProofsDataUrl(meta.beforePhotos, token),
+          afterPhotos: signProofsDataUrl(meta.afterPhotos, token),
         };
       });
 
@@ -1332,7 +1393,7 @@ app.get("/api/state", requireAuth, async (req, res) => {
           category: meta.category,
           notes: meta.notes,
           linkedBookingId: meta.linkedBookingId,
-          proofs: meta.proofs,
+          proofs: signProofsDataUrl(meta.proofs, token),
         };
       });
 
@@ -1354,7 +1415,7 @@ app.get("/api/state", requireAuth, async (req, res) => {
       });
 
     const expensesMapped = expensesRes.data
-      .filter((row: any) => !isStoredMaintenanceIssueRow(row) && !isStoredExtraRevenueRow(row) && !isStoredAuditLogRow(row))
+      .filter((row: any) => !isStoredMaintenanceIssueRow(row) && !isStoredExtraRevenueRow(row) && !isStoredAuditLogRow(row) && !isStoredProofFileRow(row))
       .map((e: any) => {
         const expenseMeta = decodeExpenseMeta(e.description);
         return {
@@ -1371,7 +1432,7 @@ app.get("/api/state", requireAuth, async (req, res) => {
           maintenanceIssueId: expenseMeta.maintenanceIssueId,
           vendorName: expenseMeta.vendorName,
           receiptReference: expenseMeta.receiptReference,
-          proofs: expenseMeta.proofs,
+          proofs: signProofsDataUrl(expenseMeta.proofs, token),
         };
       });
 
@@ -1385,7 +1446,7 @@ app.get("/api/state", requireAuth, async (req, res) => {
         date: i.date,
         equityPercentage: Number.isFinite(equityPercentage) && equityPercentage > 0 ? equityPercentage : undefined,
         notes: investorMeta.notes,
-        proofs: investorMeta.proofs,
+        proofs: signProofsDataUrl(investorMeta.proofs, token),
       };
     });
 
@@ -1423,6 +1484,116 @@ app.get("/api/state", requireAuth, async (req, res) => {
       });
     }
     return res.status(500).json({ error: "Failed to load database records." });
+  }
+});
+
+// -------------------------------------------------------------
+// SECURE FILE PROOF STORAGE ENDPOINTS
+// -------------------------------------------------------------
+app.post("/api/proofs", requireAuth, async (req, res) => {
+  const p = req.body; // { id, name, mimeType, size, dataUrl }
+  if (!p || !p.id || !p.dataUrl) {
+    return res.status(400).json({ error: "Missing required proof attachment parameters." });
+  }
+
+  if (!supabase) {
+    localProofs.set(p.id, p);
+    return res.json({ success: true, localOnly: true });
+  }
+
+  try {
+    const { error } = await supabase.from("expenses").upsert({
+      id: p.id,
+      title: p.name || "proof-file",
+      category: "proof-file",
+      amount: 0,
+      date: new Date().toISOString().slice(0, 10),
+      room_id: null,
+      status: "paid",
+      description: encodeProofFileDescription(p),
+      paid_from_investor_fund_id: null
+    });
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error("Failed to upload proof to database:", err);
+    res.status(500).json({ error: err.message || "Failed to store proof file in database." });
+  }
+});
+
+app.get("/api/proofs/:id", async (req, res) => {
+  const authHeader = req.headers.authorization;
+  let token = "";
+  if (authHeader) {
+    token = authHeader.replace("Bearer ", "");
+  } else if (typeof req.query.token === "string") {
+    token = req.query.token;
+  }
+
+  if (!token) {
+    return res.status(401).send("Access Denied: Missing authorization headers or query token.");
+  }
+
+  const session = verifySessionToken(token);
+  if (!session) {
+    return res.status(401).send("Access Denied: Revoked or expired session token bounds.");
+  }
+
+  if (!supabase) {
+    const p = localProofs.get(req.params.id);
+    if (!p) {
+      return res.status(404).send("File not found locally.");
+    }
+    const match = p.dataUrl.match(/^data:([^;]+);base64,(.*)$/);
+    if (!match) {
+      return res.status(500).send("Invalid local file encoding.");
+    }
+    const mimeType = match[1];
+    const base64Data = match[2];
+    const fileBuffer = Buffer.from(base64Data, "base64");
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Content-Length", fileBuffer.length);
+    return res.send(fileBuffer);
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("expenses")
+      .select("title, description")
+      .eq("id", req.params.id)
+      .single();
+
+    if (error) {
+      if (error.code === "PGRST116") {
+        return res.status(404).send("Proof file row not found.");
+      }
+      throw error;
+    }
+    if (!data || !isStoredProofFileRow(data)) {
+      return res.status(404).send("Proof file row not found.");
+    }
+
+    const meta = decodeProofFileMeta(data.description);
+    if (!meta.dataUrl) {
+      return res.status(404).send("Proof file content is empty.");
+    }
+
+    const match = meta.dataUrl.match(/^data:([^;]+);base64,(.*)$/);
+    if (!match) {
+      return res.status(500).send("Invalid stored proof file encoding.");
+    }
+
+    const mimeType = match[1];
+    const base64Data = match[2];
+    const fileBuffer = Buffer.from(base64Data, "base64");
+
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Content-Length", fileBuffer.length);
+    res.send(fileBuffer);
+  } catch (err: any) {
+    console.error("Failed to load proof from database:", err);
+    res.status(500).send(err.message || "Failed to load proof from database.");
   }
 });
 
@@ -1576,6 +1747,8 @@ app.post("/api/sync", requireAuth, async (req, res) => {
           existingExpensesById.set(e.id, { type: 'revenue', meta: decodeExtraRevenueMeta(e.description) });
         } else if (isStoredAuditLogRow(e)) {
           // Audit logs do not have proofs
+        } else if (isStoredProofFileRow(e)) {
+          // Proof files do not need restoration mapping
         } else {
           existingExpensesById.set(e.id, { type: 'expense', meta: decodeExpenseMeta(e.description) });
         }
@@ -1795,6 +1968,19 @@ app.post("/api/sync", requireAuth, async (req, res) => {
     }
 
     if (isAdmin) {
+      // Collect all proof IDs referenced across guests, bookings, expenses, investors, maintenanceIssues, and extraRevenueEntries
+      const referencedProofIds = [
+        ...guests.flatMap((g: any) => (g.identityProofs || []).map((p: any) => p.id)),
+        ...bookings.flatMap((b: any) => (b.proofs || []).map((p: any) => p.id)),
+        ...expenses.flatMap((e: any) => (e.proofs || []).map((p: any) => p.id)),
+        ...investors.flatMap((i: any) => (i.proofs || []).map((p: any) => p.id)),
+        ...maintenanceIssues.flatMap((m: any) => [
+          ...(m.beforePhotos || []),
+          ...(m.afterPhotos || [])
+        ].map((p: any) => p.id)),
+        ...extraRevenueEntries.flatMap((er: any) => (er.proofs || []).map((p: any) => p.id)),
+      ].filter(Boolean);
+
       // Remove rows after upserts, starting with dependent tables.
       await deleteMissingRows({
         table: "expenses",
@@ -1803,6 +1989,7 @@ app.post("/api/sync", requireAuth, async (req, res) => {
           ...maintenanceIssues.map((issue) => issue.id),
           ...extraRevenueEntries.map((entry) => entry.id),
           ...auditLogs.map((entry) => entry.id),
+          ...referencedProofIds,
         ]
       });
 
