@@ -1981,37 +1981,47 @@ app.post("/api/sync", requireAuth, async (req, res) => {
         ...extraRevenueEntries.flatMap((er: any) => (er.proofs || []).map((p: any) => p.id)),
       ].filter(Boolean);
 
-      // Remove rows after upserts, starting with dependent tables.
-      await deleteMissingRows({
-        table: "expenses",
-        idsToKeep: [
-          ...expenses.map((expense) => expense.id),
-          ...maintenanceIssues.map((issue) => issue.id),
-          ...extraRevenueEntries.map((entry) => entry.id),
-          ...auditLogs.map((entry) => entry.id),
-          ...referencedProofIds,
-        ]
-      });
+      // Remove rows after upserts, starting with dependent tables, only if table data is explicitly sent in the payload.
+      if (req.body?.expenses !== undefined) {
+        await deleteMissingRows({
+          table: "expenses",
+          idsToKeep: [
+            ...expenses.map((expense) => expense.id),
+            ...maintenanceIssues.map((issue) => issue.id),
+            ...extraRevenueEntries.map((entry) => entry.id),
+            ...auditLogs.map((entry) => entry.id),
+            ...referencedProofIds,
+          ]
+        });
+      }
 
-      await deleteMissingRows({
-        table: "bookings",
-        idsToKeep: bookings.map((booking) => booking.id)
-      });
+      if (req.body?.bookings !== undefined) {
+        await deleteMissingRows({
+          table: "bookings",
+          idsToKeep: bookings.map((booking) => booking.id)
+        });
+      }
 
-      await deleteMissingRows({
-        table: "guests",
-        idsToKeep: guests.map((guest) => guest.id)
-      });
+      if (req.body?.guests !== undefined) {
+        await deleteMissingRows({
+          table: "guests",
+          idsToKeep: guests.map((guest) => guest.id)
+        });
+      }
 
-      await deleteMissingRows({
-        table: "investors",
-        idsToKeep: investors.map((investor) => investor.id)
-      });
+      if (req.body?.investors !== undefined) {
+        await deleteMissingRows({
+          table: "investors",
+          idsToKeep: investors.map((investor) => investor.id)
+        });
+      }
 
-      await deleteMissingRows({
-        table: "rooms",
-        idsToKeep: rooms.map((room) => room.id)
-      });
+      if (req.body?.rooms !== undefined) {
+        await deleteMissingRows({
+          table: "rooms",
+          idsToKeep: rooms.map((room) => room.id)
+        });
+      }
     }
 
     return res.json({ success: true, message: "Database synchronized successfully!" });
